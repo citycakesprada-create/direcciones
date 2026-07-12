@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0B0F19">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>BogoZonas - Clasificador de Direcciones</title>
+  <title>BogoZonas - Clasificador y Planificador de Rutas</title>
   
   <!-- Web App Manifest -->
   <link rel="manifest" href="manifest.json">
@@ -38,7 +38,7 @@
         </div>
         <div>
           <h1>BogoZonas</h1>
-          <p>Clasificación instantánea de direcciones</p>
+          <p>Clasificación y Rutas de Mensajería</p>
         </div>
       </div>
       <div class="network-badge" id="network-status">
@@ -47,162 +47,263 @@
       </div>
     </header>
 
+    <!-- Tabs Navigation -->
+    <div class="tabs-nav">
+      <button class="tab-btn active" id="tab-scanner-btn">
+        <i data-lucide="camera"></i> Escanear / Digitar
+      </button>
+      <button class="tab-btn" id="tab-route-btn">
+        <i data-lucide="route"></i> Planificador de Ruta
+      </button>
+    </div>
+
     <!-- Main Content Grid -->
     <main class="app-main">
       
-      <!-- Section: Scanner / Capture -->
-      <section class="card scanner-card">
-        <div class="card-header">
-          <h2><i data-lucide="camera"></i> Escanear Dirección</h2>
-          <span class="step-badge">Paso 1</span>
-        </div>
-        
-        <div class="scanner-container">
-          <!-- Camera Feed -->
-          <div class="video-wrapper">
-            <video id="webcam" autoplay playsinline muted></video>
-            <div class="scanner-overlay">
-              <div class="scanner-box">
-                <div class="corner top-left"></div>
-                <div class="corner top-right"></div>
-                <div class="corner bottom-left"></div>
-                <div class="corner bottom-right"></div>
-                <div class="scanner-line"></div>
-                <div class="scanner-tip">Encuadra el texto de la dirección aquí</div>
+      <!-- TAB 1: SCANNER VIEW -->
+      <div id="scanner-tab-content">
+        <!-- Section: Scanner / Capture -->
+        <section class="card scanner-card">
+          <div class="card-header">
+            <h2><i data-lucide="scan-face"></i> Escanear Dirección</h2>
+            <span class="step-badge">Paso 1</span>
+          </div>
+          
+          <div class="scanner-container">
+            <!-- Camera Feed -->
+            <div class="video-wrapper">
+              <video id="webcam" autoplay playsinline muted></video>
+              <div class="scanner-overlay">
+                <div class="scanner-box">
+                  <div class="corner top-left"></div>
+                  <div class="corner top-right"></div>
+                  <div class="corner bottom-left"></div>
+                  <div class="corner bottom-right"></div>
+                  <div class="scanner-line"></div>
+                  <div class="scanner-tip">Encuadra el texto de la dirección aquí</div>
+                </div>
+              </div>
+              <!-- Canvas for capturing frame -->
+              <canvas id="capture-canvas" style="display: none;"></canvas>
+              
+              <!-- Static placeholder / Gallery Preview -->
+              <div id="image-preview-container" class="image-preview-container hidden">
+                <img id="image-preview" src="" alt="Vista previa">
+                <button class="btn btn-icon btn-danger remove-image-btn" id="btn-clear-image" title="Quitar imagen">
+                  <i data-lucide="x"></i>
+                </button>
               </div>
             </div>
-            <!-- Canvas for capturing frame -->
-            <canvas id="capture-canvas" style="display: none;"></canvas>
             
-            <!-- Static placeholder / Gallery Preview -->
-            <div id="image-preview-container" class="image-preview-container hidden">
-              <img id="image-preview" src="" alt="Vista previa">
-              <button class="btn btn-icon btn-danger remove-image-btn" id="btn-clear-image" title="Quitar imagen">
-                <i data-lucide="x"></i>
-              </button>
+            <!-- Scanner Actions -->
+            <div class="scanner-actions">
+              <!-- Camera mode toggles -->
+              <div class="camera-controls">
+                <button class="btn btn-secondary" id="btn-start-camera">
+                  <i data-lucide="play"></i> Iniciar Cámara
+                </button>
+                <button class="btn btn-secondary hidden" id="btn-switch-camera">
+                  <i data-lucide="refresh-cw"></i> Cambiar Cámara
+                </button>
+                <button class="btn btn-danger hidden" id="btn-stop-camera">
+                  <i data-lucide="square"></i> Detener
+                </button>
+              </div>
+              
+              <!-- Process controls -->
+              <div class="process-controls">
+                <button class="btn btn-primary btn-lg btn-glow hidden" id="btn-capture">
+                  <i data-lucide="aperture"></i> Tomar Foto
+                </button>
+                
+                <label for="gallery-input" class="btn btn-outline btn-lg" id="btn-gallery-label">
+                  <i data-lucide="image"></i> Subir de Galería
+                </label>
+                <input type="file" id="gallery-input" accept="image/*" class="hidden">
+              </div>
+            </div>
+          </div>
+
+          <!-- OCR Loading overlay -->
+          <div id="ocr-loader" class="ocr-loader hidden">
+            <div class="loader-content">
+              <div class="spinner"></div>
+              <h3>Procesando con Inteligencia Artificial (OCR)...</h3>
+              <p id="ocr-status-text">Leyendo texto de la imagen...</p>
+              <div class="progress-bar-container">
+                <div id="ocr-progress-bar" class="progress-bar"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Section: Results & Verification -->
+        <section class="card results-card" id="results-section">
+          <div class="card-header">
+            <h2><i data-lucide="layers"></i> Resultado del Análisis</h2>
+            <span class="step-badge">Paso 2</span>
+          </div>
+          
+          <div class="results-layout">
+            <!-- Left: Classification Info -->
+            <div class="classification-info">
+              <div class="zone-badge-container">
+                <div id="result-zone-badge" class="zone-badge zone-unclassified">
+                  <div class="zone-badge-icon">
+                    <i data-lucide="help-circle" id="zone-icon"></i>
+                  </div>
+                  <div class="zone-badge-text">
+                    <span class="badge-label">Zona Detectada</span>
+                    <h3 id="result-zone-name">Sin Escanear</h3>
+                  </div>
+                </div>
+              </div>
+
+              <div class="extracted-details">
+                <h3>Detalles de Dirección</h3>
+                <div class="details-grid">
+                  <div class="detail-item">
+                    <span class="detail-label">Calle</span>
+                    <span class="detail-val" id="detail-calle">-</span>
+                  </div>
+                  <div class="detail-item">
+                    <span class="detail-label">Carrera</span>
+                    <span class="detail-val" id="detail-carrera">-</span>
+                  </div>
+                  <div class="detail-item">
+                    <span class="detail-label">Texto Detectado</span>
+                    <span class="detail-val text-raw" id="detail-raw-text">Ninguno</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right: Interactive Editor -->
+            <div class="address-editor">
+              <h3>Corregir o Digitar Dirección</h3>
+              <form id="address-form" class="form-grid">
+                <div class="form-group">
+                  <label for="input-type">Vía Principal</label>
+                  <select id="input-type" class="form-control">
+                    <option value="calle">Calle</option>
+                    <option value="carrera">Carrera</option>
+                    <option value="diagonal">Diagonal</option>
+                    <option value="transversal">Transversal</option>
+                    <option value="avenida">Avenida</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="input-main-number">Número Vía</label>
+                  <input type="text" id="input-main-number" class="form-control" placeholder="Ej. 147" pattern="\d+[A-Za-z]?" required>
+                </div>
+                <div class="form-group">
+                  <label for="input-crossing-number">Número Cruce</label>
+                  <input type="text" id="input-crossing-number" class="form-control" placeholder="Ej. 19" pattern="\d+[A-Za-z]?" required>
+                </div>
+                <div class="form-group">
+                  <label for="input-plate">Placa / Casa</label>
+                  <input type="text" id="input-plate" class="form-control" placeholder="Ej. 50">
+                </div>
+                <div class="form-actions" style="grid-column: span 2; display: flex; gap: 10px; margin-top: 10px;">
+                  <button type="submit" class="btn btn-primary" style="flex: 1.2;">
+                    <i data-lucide="check-circle"></i> Clasificar
+                  </button>
+                  <button type="button" class="btn btn-secondary" id="btn-add-to-route" style="flex: 0.8;">
+                    <i data-lucide="plus"></i> A mi Ruta
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </section>
+
+        <!-- Section: History -->
+        <section class="card history-card">
+          <div class="card-header">
+            <h2><i data-lucide="history"></i> Historial Reciente</h2>
+            <button class="btn btn-small btn-outline" id="btn-clear-history">
+              <i data-lucide="trash-2"></i> Limpiar Historial
+            </button>
+          </div>
+          
+          <div class="history-list-wrapper">
+            <div class="history-empty" id="history-empty-message">
+              <i data-lucide="clock" class="empty-icon"></i>
+              <p>No tienes escaneos recientes.</p>
+              <span>Las direcciones que clasifiques aparecerán aquí para acceso rápido offline.</span>
+            </div>
+            <ul class="history-list hidden" id="history-list">
+              <!-- Inserted dynamically -->
+            </ul>
+          </div>
+        </section>
+      </div>
+
+
+      <!-- TAB 2: ROUTE PLANNER VIEW -->
+      <div id="route-tab-content" class="hidden">
+        <!-- Section: Bulk Load -->
+        <section class="card route-input-card">
+          <div class="card-header">
+            <h2><i data-lucide="plus-circle"></i> Cargar Direcciones en Bloque</h2>
+          </div>
+          <div class="bulk-input-container">
+            <p class="bulk-tip">Pega un listado de direcciones (una por línea). El sistema clasificará las zonas de Bogotá y creará un mapa interactivo.</p>
+            <textarea id="bulk-addresses-input" placeholder="Ejemplo:&#10;Calle 147 # 19 - 50&#10;Carrera 11 # 82 - 01&#10;Calle 116 # 53 - 10" rows="5" class="form-control text-area-bulk" style="font-family: monospace; resize: vertical; margin-bottom: 12px; height: 120px;"></textarea>
+            <button class="btn btn-primary btn-full" id="btn-add-bulk">
+              <i data-lucide="plus"></i> Cargar y Clasificar Entregas
+            </button>
+          </div>
+        </section>
+
+        <!-- Section: Active Route List -->
+        <section class="card route-manager-card">
+          <div class="card-header">
+            <h2><i data-lucide="milestone"></i> Lista de Entregas</h2>
+            <span class="route-count-badge" id="route-progress-label">0 / 0 Entregas</span>
+          </div>
+          
+          <!-- Route Progress Bar -->
+          <div class="route-progress-container" style="margin-bottom: 16px;">
+            <div class="progress-bar-container">
+              <div id="route-progress-bar" class="progress-bar" style="width: 0%;"></div>
             </div>
           </div>
           
-          <!-- Scanner Actions -->
-          <div class="scanner-actions">
-            <!-- Camera mode toggles -->
-            <div class="camera-controls">
-              <button class="btn btn-secondary" id="btn-start-camera">
-                <i data-lucide="play"></i> Iniciar Cámara
-              </button>
-              <button class="btn btn-secondary hidden" id="btn-switch-camera">
-                <i data-lucide="refresh-cw"></i> Cambiar Cámara
-              </button>
-              <button class="btn btn-danger hidden" id="btn-stop-camera">
-                <i data-lucide="square"></i> Detener
-              </button>
-            </div>
-            
-            <!-- Process controls -->
-            <div class="process-controls">
-              <button class="btn btn-primary btn-lg btn-glow hidden" id="btn-capture">
-                <i data-lucide="aperture"></i> Tomar Foto
-              </button>
-              
-              <label for="gallery-input" class="btn btn-outline btn-lg" id="btn-gallery-label">
-                <i data-lucide="image"></i> Subir de Galería
-              </label>
-              <input type="file" id="gallery-input" accept="image/*" class="hidden">
-            </div>
-          </div>
-        </div>
-
-        <!-- OCR Loading overlay -->
-        <div id="ocr-loader" class="ocr-loader hidden">
-          <div class="loader-content">
-            <div class="spinner"></div>
-            <h3>Procesando con Inteligencia Artificial (OCR)...</h3>
-            <p id="ocr-status-text">Leyendo texto de la imagen...</p>
-            <div class="progress-bar-container">
-              <div id="ocr-progress-bar" class="progress-bar"></div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Section: Results & Verification -->
-      <section class="card results-card" id="results-section">
-        <div class="card-header">
-          <h2><i data-lucide="layers"></i> Resultado del Análisis</h2>
-          <span class="step-badge">Paso 2</span>
-        </div>
-        
-        <div class="results-layout">
-          <!-- Left: Classification Info -->
-          <div class="classification-info">
-            <div class="zone-badge-container">
-              <div id="result-zone-badge" class="zone-badge zone-unclassified">
-                <div class="zone-badge-icon">
-                  <i data-lucide="help-circle" id="zone-icon"></i>
-                </div>
-                <div class="zone-badge-text">
-                  <span class="badge-label">Zona Detectada</span>
-                  <h3 id="result-zone-name">Sin Escanear</h3>
-                </div>
-              </div>
-            </div>
-
-            <div class="extracted-details">
-              <h3>Detalles de Dirección</h3>
-              <div class="details-grid">
-                <div class="detail-item">
-                  <span class="detail-label">Calle</span>
-                  <span class="detail-val" id="detail-calle">-</span>
-                </div>
-                <div class="detail-item">
-                  <span class="detail-label">Carrera</span>
-                  <span class="detail-val" id="detail-carrera">-</span>
-                </div>
-                <div class="detail-item">
-                  <span class="detail-label">Texto Detectado</span>
-                  <span class="detail-val text-raw" id="detail-raw-text">Ninguno</span>
-                </div>
-              </div>
-            </div>
+          <!-- Route Control Actions -->
+          <div class="route-actions-bar" style="display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap;">
+            <button class="btn btn-primary btn-glow" id="btn-optimize-route" style="flex: 1.2; min-width: 140px;">
+              <i data-lucide="sparkles"></i> Optimizar Ruta
+            </button>
+            <button class="btn btn-outline" id="btn-share-whatsapp" style="flex: 1; min-width: 140px;">
+              <i data-lucide="share-2"></i> Compartir WhatsApp
+            </button>
+            <button class="btn btn-danger" id="btn-clear-route" style="flex: 0.8; min-width: 100px;">
+              <i data-lucide="trash-2"></i> Limpiar Ruta
+            </button>
           </div>
 
-          <!-- Right: Interactive Editor -->
-          <div class="address-editor">
-            <h3>Corregir o Digitar Dirección</h3>
-            <form id="address-form" class="form-grid">
-              <div class="form-group">
-                <label for="input-type">Vía Principal</label>
-                <select id="input-type" class="form-control">
-                  <option value="calle">Calle</option>
-                  <option value="carrera">Carrera</option>
-                  <option value="diagonal">Diagonal</option>
-                  <option value="transversal">Transversal</option>
-                  <option value="avenida">Avenida</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label for="input-main-number">Número Vía</label>
-                <input type="text" id="input-main-number" class="form-control" placeholder="Ej. 147" pattern="\d+[A-Za-z]?" required>
-              </div>
-              <div class="form-group">
-                <label for="input-crossing-number">Número Cruce</label>
-                <input type="text" id="input-crossing-number" class="form-control" placeholder="Ej. 19" pattern="\d+[A-Za-z]?" required>
-              </div>
-              <div class="form-group">
-                <label for="input-plate">Placa / Casa</label>
-                <input type="text" id="input-plate" class="form-control" placeholder="Ej. 50">
-              </div>
-              <div class="form-actions">
-                <button type="submit" class="btn btn-primary btn-full">
-                  <i data-lucide="check-circle"></i> Clasificar Dirección
-                </button>
-              </div>
-            </form>
+          <!-- Base address reference -->
+          <div class="route-base-info" style="display: flex; align-items: center; gap: 8px; background: rgba(99, 102, 241, 0.08); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px dashed rgba(99, 102, 241, 0.2); margin-bottom: 14px; font-size: 0.85rem; color: #a5b4fc;">
+            <i data-lucide="warehouse" style="width: 16px; height: 16px; color: var(--primary);"></i>
+            <span>Punto de partida (Base): <strong>Calle 162 # 20 - 31</strong></span>
           </div>
-        </div>
-      </section>
 
-      <!-- Section: Map Visualization -->
+          <!-- Dynamic Route List -->
+          <div class="route-list-wrapper">
+            <div id="route-empty-message" class="history-empty">
+              <i data-lucide="map" class="empty-icon"></i>
+              <p>Tu ruta está vacía</p>
+              <span>Escanea direcciones en la otra pestaña o pégalas arriba para armar el recorrido del mensajero.</span>
+            </div>
+            <ul class="route-list" id="route-list" style="list-style: none; display: flex; flex-direction: column; gap: 10px;">
+              <!-- Dynamically populated -->
+            </ul>
+          </div>
+        </section>
+      </div>
+
+      <!-- Section: Map Visualization (Persistent on bottom) -->
       <section class="card map-card">
         <div class="card-header">
           <h2><i data-lucide="navigation"></i> Ubicación y Límites Geográficos</h2>
@@ -310,6 +411,15 @@
                 <text x="200" y="652">Calle 100</text>
               </g>
 
+              <!-- SVG Route Polyline -->
+              <path id="svg-route-path" d="" fill="none" stroke="rgba(99, 102, 241, 0.65)" stroke-width="3" stroke-dasharray="6, 4" stroke-linecap="round" />
+
+              <!-- SVG Base Pin -->
+              <g id="svg-base-pin" transform="translate(525, 350)"> <!-- Calle 162, Carrera 20 mapping -->
+                <circle cx="0" cy="0" r="10" fill="rgba(99, 102, 241, 0.4)" class="svg-marker-pulse" />
+                <rect x="-6" y="-6" width="12" height="12" rx="3" fill="#6366f1" stroke="#ffffff" stroke-width="1.5" />
+              </g>
+
               <!-- SVG Interactive Marker -->
               <g id="svg-marker" class="hidden">
                 <circle cx="0" cy="0" r="16" fill="rgba(239, 35, 60, 0.4)" class="svg-marker-pulse" />
@@ -325,27 +435,6 @@
           <div class="legend-item"><span class="legend-color chapinero"></span> Chapinero</div>
           <div class="legend-item"><span class="legend-color suba1"></span> Suba 1</div>
           <div class="legend-item"><span class="legend-color suba2"></span> Suba 2</div>
-        </div>
-      </section>
-
-      <!-- Section: History -->
-      <section class="card history-card">
-        <div class="card-header">
-          <h2><i data-lucide="history"></i> Historial Reciente</h2>
-          <button class="btn btn-small btn-outline" id="btn-clear-history">
-            <i data-lucide="trash-2"></i> Limpiar Historial
-          </button>
-        </div>
-        
-        <div class="history-list-wrapper">
-          <div class="history-empty" id="history-empty-message">
-            <i data-lucide="clock" class="empty-icon"></i>
-            <p>No tienes escaneos recientes.</p>
-            <span>Las direcciones que clasifiques aparecerán aquí para acceso rápido offline.</span>
-          </div>
-          <ul class="history-list hidden" id="history-list">
-            <!-- Inserted dynamically -->
-          </ul>
         </div>
       </section>
 

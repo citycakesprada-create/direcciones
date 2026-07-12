@@ -16,8 +16,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnCapture = document.getElementById('btn-capture');
   const btnClearImage = document.getElementById('btn-clear-image');
   const galleryInput = document.getElementById('gallery-input');
+  const btnAddToRoute = document.getElementById('btn-add-to-route');
   
-  // Tabs & Views
+  // Tabs Navigation
+  const tabScannerBtn = document.getElementById('tab-scanner-btn');
+  const tabRouteBtn = document.getElementById('tab-route-btn');
+  const scannerTabContent = document.getElementById('scanner-tab-content');
+  const routeTabContent = document.getElementById('route-tab-content');
+  
+  // Maps & Visualizers
   const btnMapOnline = document.getElementById('btn-map-online');
   const btnMapOffline = document.getElementById('btn-map-offline');
   const mapElement = document.getElementById('map');
@@ -43,6 +50,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const inputCrossingNumber = document.getElementById('input-crossing-number');
   const inputPlate = document.getElementById('input-plate');
   
+  // Route Elements
+  const bulkAddressesInput = document.getElementById('bulk-addresses-input');
+  const btnAddBulk = document.getElementById('btn-add-bulk');
+  const routeList = document.getElementById('route-list');
+  const routeEmptyMessage = document.getElementById('route-empty-message');
+  const routeProgressLabel = document.getElementById('route-progress-label');
+  const routeProgressBar = document.getElementById('route-progress-bar');
+  const btnOptimizeRoute = document.getElementById('btn-optimize-route');
+  const btnShareWhatsapp = document.getElementById('btn-share-whatsapp');
+  const btnClearRoute = document.getElementById('btn-clear-route');
+
   // History & Network
   const historyList = document.getElementById('history-list');
   const historyEmptyMessage = document.getElementById('history-empty-message');
@@ -53,14 +71,36 @@ document.addEventListener('DOMContentLoaded', () => {
   let webcamStream = null;
   let useRearCamera = true;
   let isMapOnline = true;
+  let activeTab = 'scanner'; // 'scanner' or 'route'
+  
+  // Leaflet Map Handles
   let leafletMap = null;
-  let leafletMarker = null;
+  let leafletMarker = null; // Scanner marker
   let leafletPolygons = {};
+  let leafletRouteMarkers = [];
+  let leafletRoutePolyline = null;
+  
+  // Scanner state
   let currentScanResult = null;
   let tesseractWorker = null;
 
+  // Route Planning State
+  let deliveryRoute = [];
+  
+  // Base Station Coordinates (Calle 162 # 20 - 31)
+  const BASE_CALLE = 162;
+  const BASE_CARRERA = 20;
+  const BASE_COORDS = approximateGridToCoordinates(BASE_CALLE, BASE_CARRERA);
+
   // Initialize Lucide Icons
   lucide.createIcons();
+
+  // Load Route state from storage
+  try {
+    deliveryRoute = JSON.parse(localStorage.getItem('bogozonas_delivery_route')) || [];
+  } catch (e) {
+    deliveryRoute = [];
+  }
 
   // --- 1. Service Worker & PWA ---
   if ('serviceWorker' in navigator) {
@@ -69,7 +109,31 @@ document.addEventListener('DOMContentLoaded', () => {
       .catch(err => console.error('Error al registrar Service Worker:', err));
   }
 
-  // --- 2. Network Status Monitoring ---
+  // --- 2. Tabs Switcher ---
+  function switchTab(tabId) {
+    activeTab = tabId;
+    if (tabId === 'scanner') {
+      tabScannerBtn.classList.add('active');
+      tabRouteBtn.classList.remove('active');
+      scannerTabContent.classList.remove('hidden');
+      routeTabContent.classList.add('hidden');
+      // Redraw map for single scanner address
+      triggerMapRedraw();
+    } else {
+      tabScannerBtn.classList.remove('active');
+      tabRouteBtn.classList.add('active');
+      scannerTabContent.classList.add('hidden');
+      routeTabContent.classList.remove('hidden');
+      // Redraw map for route planning
+      triggerMapRedraw();
+    }
+    stopWebcam();
+  }
+
+  tabScannerBtn.addEventListener('click', () => switchTab('scanner'));
+  tabRouteBtn.addEventListener('click', () => switchTab('route'));
+
+  // --- 3. Network Status Monitoring ---
   function updateNetworkStatus() {
     if (navigator.onLine) {
       networkStatus.classList.remove('offline');
@@ -86,7 +150,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('offline', updateNetworkStatus);
   updateNetworkStatus(); // Initial status check
 
-  // --- 3. Camera Operations ---
+  // --- 4. Camera Operations ---
   async function startWebcam() {
     stopWebcam();
     imagePreviewContainer.classList.add('hidden');
@@ -111,7 +175,6 @@ document.addEventListener('DOMContentLoaded', () => {
       btnCapture.classList.remove('hidden');
     } catch (err) {
       console.warn("No se pudo iniciar cámara trasera específica, reintentando con cámara general:", err);
-      // Fallback to any camera if environment-specific fails
       try {
         const fallbackConstraints = { video: { facingMode: "user" }, audio: false };
         webcamStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
@@ -148,12 +211,10 @@ document.addEventListener('DOMContentLoaded', () => {
   function captureFrame() {
     if (!webcamStream) return;
     
-    // Configure canvas size matching video frame
     captureCanvas.width = webcamElement.videoWidth;
     captureCanvas.height = webcamElement.videoHeight;
     
     const ctx = captureCanvas.getContext('2d');
-    // Draw current video frame to canvas
     ctx.drawImage(webcamElement, 0, 0, captureCanvas.width, captureCanvas.height);
     
     const dataURL = captureCanvas.toDataURL('image/jpeg');
@@ -174,7 +235,7 @@ document.addEventListener('DOMContentLoaded', () => {
     imagePreview.src = '';
   });
 
-  // --- 4. Gallery Uploads ---
+  // --- 5. Gallery Uploads ---
   galleryInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -189,19 +250,16 @@ document.addEventListener('DOMContentLoaded', () => {
       processImageOCR(dataURL);
     };
     reader.readAsDataURL(file);
-    
-    // Reset file input value to allow triggering change on same image
     galleryInput.value = '';
   });
 
-  // --- 5. OCR Engine (Tesseract.js) ---
+  // --- 6. OCR Engine (Tesseract.js) ---
   async function processImageOCR(imageSource) {
     ocrLoader.classList.remove('hidden');
     ocrStatusText.textContent = "Cargando motor de reconocimiento OCR...";
     ocrProgressBar.style.width = '10%';
 
     try {
-      // Lazy initialization of Tesseract worker
       if (!tesseractWorker) {
         tesseractWorker = await Tesseract.createWorker('spa', 1, {
           logger: m => {
@@ -234,11 +292,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // --- 6. Bogota Address Parser & Normalizer ---
-  function parseAndClassifyAddress(text) {
-    if (!text || text.trim() === '') return;
+  // --- 7. Address Parser ---
+  function parseSingleAddressString(text) {
+    if (!text || text.trim() === '') return null;
 
-    // Normalization logic
     let cleanText = text.toLowerCase()
       .replace(/[áäàâ]/g, 'a')
       .replace(/[éëèê]/g, 'e')
@@ -246,9 +303,8 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/[óöòô]/g, 'o')
       .replace(/[úüùû]/g, 'u')
       .replace(/ñ/g, 'n')
-      .replace(/\./g, ' '); // remove dots
+      .replace(/\./g, ' ');
 
-    // Normalize address abbreviations
     cleanText = cleanText
       .replace(/\bcll?\b|\bcalle\b|\bcld\b/g, 'calle')
       .replace(/\bcra?\b|\bkr\b|\bkra\b|\bcarrera\b/g, 'carrera')
@@ -257,17 +313,11 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/\bav\b|\bavenida\b/g, 'avenida')
       .replace(/\bn[o°º]\b|\bnum\b|\bnumero\b/g, '#');
 
-    console.log("Normalized Text for Parser:", cleanText);
-
-    // Primary parser regex matching standard patterns like "calle 147 # 19 - 50"
-    // Groups: 1=type, 2=mainNum, 3=mainSuffix, 4=crossingNum, 5=crossingSuffix, 6=plate
     const standardRegex = /(calle|carrera|diagonal|transversal|avenida)\s*(\d+)\s*([a-z]?)(?:\s*bis)?(?:\s*(?:norte|sur|este))?\s*(?:#|no|\s)\s*(\d+)\s*([a-z]?)(?:\s*bis)?\s*(?:-|\s)?\s*(\d+)/i;
-    
     const match = cleanText.match(standardRegex);
-    let addressInfo = null;
 
     if (match) {
-      addressInfo = {
+      return {
         type: match[1].toLowerCase(),
         mainNum: parseInt(match[2]),
         mainSuffix: match[3] || '',
@@ -276,33 +326,35 @@ document.addEventListener('DOMContentLoaded', () => {
         plate: match[6] || '',
         raw: text.trim()
       };
-    } else {
-      // Fallback parser if standard layout fails (e.g. OCR grabs chaotic pieces)
-      // We look for any "calle/diagonal X" and "carrera/transversal Y" in the text
-      const calleMatch = cleanText.match(/\b(calle|diagonal)\s*(\d+)\s*([a-z]?)/i);
-      const carreraMatch = cleanText.match(/\b(carrera|transversal)\s*(\d+)\s*([a-z]?)/i);
-      const plateMatch = cleanText.match(/#\s*(\d+)/i) || cleanText.match(/-\s*(\d+)/i);
-
-      if (calleMatch && carreraMatch) {
-        // Find which one is the primary via based on which comes first in the text
-        const isCalleFirst = cleanText.indexOf(calleMatch[0]) < cleanText.indexOf(carreraMatch[0]);
-        
-        addressInfo = {
-          type: isCalleFirst ? calleMatch[1].toLowerCase() : carreraMatch[1].toLowerCase(),
-          mainNum: isCalleFirst ? parseInt(calleMatch[2]) : parseInt(carreraMatch[2]),
-          mainSuffix: isCalleFirst ? calleMatch[3] || '' : carreraMatch[3] || '',
-          crossingNum: isCalleFirst ? parseInt(carreraMatch[2]) : parseInt(calleMatch[2]),
-          crossingSuffix: isCalleFirst ? carreraMatch[3] || '' : calleMatch[3] || '',
-          plate: plateMatch ? plateMatch[1] : '',
-          raw: text.trim()
-        };
-      }
     }
+
+    // Fallback
+    const calleMatch = cleanText.match(/\b(calle|diagonal)\s*(\d+)\s*([a-z]?)/i);
+    const carreraMatch = cleanText.match(/\b(carrera|transversal)\s*(\d+)\s*([a-z]?)/i);
+    const plateMatch = cleanText.match(/#\s*(\d+)/i) || cleanText.match(/-\s*(\d+)/i);
+
+    if (calleMatch && carreraMatch) {
+      const isCalleFirst = cleanText.indexOf(calleMatch[0]) < cleanText.indexOf(carreraMatch[0]);
+      return {
+        type: isCalleFirst ? calleMatch[1].toLowerCase() : carreraMatch[1].toLowerCase(),
+        mainNum: isCalleFirst ? parseInt(calleMatch[2]) : parseInt(carreraMatch[2]),
+        mainSuffix: isCalleFirst ? calleMatch[3] || '' : carreraMatch[3] || '',
+        crossingNum: isCalleFirst ? parseInt(carreraMatch[2]) : parseInt(calleMatch[2]),
+        crossingSuffix: isCalleFirst ? carreraMatch[3] || '' : calleMatch[3] || '',
+        plate: plateMatch ? plateMatch[1] : '',
+        raw: text.trim()
+      };
+    }
+
+    return null;
+  }
+
+  function parseAndClassifyAddress(text) {
+    const addressInfo = parseSingleAddressString(text);
 
     if (addressInfo) {
       applyAddressResult(addressInfo);
     } else {
-      // If parsing fails completely, load raw text to editor for correction
       detailCalle.textContent = '-';
       detailCarrera.textContent = '-';
       detailRawText.textContent = text.length > 30 ? text.substring(0, 30) + '...' : text;
@@ -310,102 +362,83 @@ document.addEventListener('DOMContentLoaded', () => {
       updateZoneDisplay('unclassified');
       alert("No pudimos identificar la dirección automáticamente. Por favor digítala en el formulario.");
       
-      // Auto fill as much as possible to the editor
-      const words = cleanText.split(/\s+/);
-      const numbers = words.map(w => parseInt(w.replace(/\D/g, ''))).filter(n => !isNaN(n));
+      // Auto-fill coordinates inputs as much as we can extract
+      const cleanText = text.toLowerCase().replace(/\D/g, ' ');
+      const numbers = cleanText.split(/\s+/).map(n => parseInt(n)).filter(n => !isNaN(n));
       if (numbers.length > 0) inputMainNumber.value = numbers[0];
       if (numbers.length > 1) inputCrossingNumber.value = numbers[1];
       if (numbers.length > 2) inputPlate.value = numbers[2];
       
-      // Focus the form
       document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
     }
   }
 
-  // --- 7. Apply Parser Output to UI & Form ---
+  // --- 8. Apply Scanner Parser Output ---
   function applyAddressResult(info) {
     currentScanResult = info;
 
-    // Fill form inputs
     inputType.value = info.type;
     inputMainNumber.value = info.mainNum + info.mainSuffix;
     inputCrossingNumber.value = info.crossingNum + info.crossingSuffix;
     inputPlate.value = info.plate;
 
-    // Calculate grid numbers for Calle and Carrera in Bogota
-    // Calles are Calle/Diagonal
-    // Carreras are Carrera/Transversal
-    let normalizedCalle = 0;
-    let normalizedCarrera = 0;
-
-    if (info.type === 'calle' || info.type === 'diagonal') {
-      normalizedCalle = info.mainNum;
-      normalizedCarrera = info.crossingNum;
-    } else if (info.type === 'carrera' || info.type === 'transversal') {
-      normalizedCalle = info.crossingNum;
-      normalizedCarrera = info.mainNum;
-    } else if (info.type === 'avenida') {
-      // Avenidas can be either, default fallback: assume Calle if it's the main
-      // Usually, in Bogota north, streets are mostly Calles. If crossing is larger, we can invert
-      if (info.mainNum < info.crossingNum) {
-        normalizedCalle = info.mainNum;
-        normalizedCarrera = info.crossingNum;
-      } else {
-        normalizedCalle = info.crossingNum;
-        normalizedCarrera = info.mainNum;
-      }
-    }
-
-    // Update details card
-    detailCalle.textContent = `Calle ${normalizedCalle}${info.type === 'calle' ? info.mainSuffix : info.crossingSuffix}`;
-    detailCarrera.textContent = `Carrera ${normalizedCarrera}${info.type === 'carrera' ? info.mainSuffix : info.crossingSuffix}`;
+    const parsedData = getNormalizedCalleCarrera(info);
+    detailCalle.textContent = `${info.type.toUpperCase()} ${parsedData.calle}${parsedData.calleSuffix}`;
+    detailCarrera.textContent = `Carrera ${parsedData.carrera}${parsedData.carreraSuffix}`;
     detailRawText.textContent = info.raw || 'Digitado manual';
 
-    // 8. Classify Zone
-    const zone = classifyBogotaZone(normalizedCalle, normalizedCarrera);
+    const zone = classifyBogotaZone(parsedData.calle, parsedData.carrera);
     updateZoneDisplay(zone);
 
-    // 9. Map Markers & Rendering
-    const coords = approximateGridToCoordinates(normalizedCalle, normalizedCarrera);
-    updateMapMarker(coords.lat, coords.lng, normalizedCalle, normalizedCarrera, zone);
+    triggerMapRedraw();
+    saveScanToHistory(info, parsedData.calle, parsedData.carrera, zone);
 
-    // 10. Save to History
-    saveScanToHistory(info, normalizedCalle, normalizedCarrera, zone);
-
-    // Scroll to results
     document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
   }
 
-  // --- 8. Zone Classifier Algorithm ---
+  function getNormalizedCalleCarrera(info) {
+    let calle = 0;
+    let carrera = 0;
+    let calleSuffix = '';
+    let carreraSuffix = '';
+
+    if (info.type === 'calle' || info.type === 'diagonal') {
+      calle = info.mainNum;
+      calleSuffix = info.mainSuffix;
+      carrera = info.crossingNum;
+      carreraSuffix = info.crossingSuffix;
+    } else {
+      calle = info.crossingNum;
+      calleSuffix = info.crossingSuffix;
+      carrera = info.mainNum;
+      carreraSuffix = info.mainSuffix;
+    }
+    return { calle, carrera, calleSuffix, carreraSuffix };
+  }
+
+  // --- 9. Zone Classifier Logic ---
   function classifyBogotaZone(calle, carrera) {
     // Usaquén: Calle 105 to 193, Carrera 2 to 45 (Autopista Norte)
     if (calle >= 105 && calle <= 193 && carrera >= 2 && carrera <= 45) {
       return 'usaquén';
     }
-    
     // Chapinero: Calle 30 to 100, Carrera 2 to 30 (NQS)
     if (calle >= 30 && calle <= 100 && carrera >= 2 && carrera <= 30) {
       return 'chapinero';
     }
-    
     // Suba 1: Calle 100 to 189, Carrera 45 (Autopista) to 72 (Boyacá)
     if (calle >= 100 && calle <= 189 && carrera >= 45 && carrera <= 72) {
       return 'suba 1';
     }
-    
     // Suba 2: Calle 90 to 189, Carrera 72 (Boyacá) to 159
     if (calle >= 90 && calle <= 189 && carrera >= 72 && carrera <= 159) {
       return 'suba 2';
     }
-    
     return 'fuera de zona';
   }
 
-  // Update Result Badge Style and Labels
   function updateZoneDisplay(zone) {
-    // Reset classes
     resultZoneBadge.className = 'zone-badge';
-    
     let label = 'Sin Clasificar';
     let iconName = 'help-circle';
     
@@ -447,19 +480,14 @@ document.addEventListener('DOMContentLoaded', () => {
     lucide.createIcons();
   }
 
-  // --- 9. Coordinate Model (Grid to Lat/Lng) ---
+  // --- 10. Coordinate Translation ---
   function approximateGridToCoordinates(calle, carrera) {
-    // Model validated against north Bogota coordinates:
-    // Lat increases as Calle increases
-    // Lng decreases (more negative/west) as Carrera increases
-    // Modest correction factors for slight road tilt
     const lat = 4.590 + (calle * 0.00095);
     const lng = -74.037 - (carrera * 0.00071) + ((calle - 100) * 0.00021);
-    
     return { lat, lng };
   }
 
-  // --- 10. Map Controller ---
+  // --- 11. Map Rendering Orchestrator ---
   function toggleMapMode(online) {
     isMapOnline = online;
     if (online) {
@@ -468,11 +496,13 @@ document.addEventListener('DOMContentLoaded', () => {
       mapElement.classList.remove('hidden');
       svgMapContainer.classList.add('hidden');
       initLeafletMap();
+      triggerMapRedraw();
     } else {
       btnMapOnline.classList.remove('active');
       btnMapOffline.classList.add('active');
       mapElement.classList.add('hidden');
       svgMapContainer.classList.remove('hidden');
+      triggerMapRedraw();
     }
   }
 
@@ -485,43 +515,24 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // Default center at Calle 120 / Carrera 30
     leafletMap = L.map('map', {
       zoomControl: true,
       attributionControl: false
     }).setView([4.704, -74.058], 12);
 
-    // Dark Map Style Tiles (Voyager Dark or CartoDB Dark Matter)
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       maxZoom: 20
     }).addTo(leafletMap);
 
-    // Draw Zone Polygons on Leaflet map
     drawLeafletZonePolygons();
   }
 
   function drawLeafletZonePolygons() {
     const zonesDef = [
-      {
-        name: 'Usaquén',
-        color: varColor('--color-usaquen'),
-        corners: [[105, 2], [193, 2], [193, 45], [105, 45]]
-      },
-      {
-        name: 'Chapinero',
-        color: varColor('--color-chapinero'),
-        corners: [[30, 2], [100, 2], [100, 30], [30, 30]]
-      },
-      {
-        name: 'Suba 1',
-        color: varColor('--color-suba1'),
-        corners: [[100, 45], [189, 45], [189, 72], [100, 72]]
-      },
-      {
-        name: 'Suba 2',
-        color: varColor('--color-suba2'),
-        corners: [[90, 72], [189, 72], [189, 159], [90, 159]]
-      }
+      { name: 'Usaquén', color: varColor('--color-usaquen'), corners: [[105, 2], [193, 2], [193, 45], [105, 45]] },
+      { name: 'Chapinero', color: varColor('--color-chapinero'), corners: [[30, 2], [100, 2], [100, 30], [30, 30]] },
+      { name: 'Suba 1', color: varColor('--color-suba1'), corners: [[100, 45], [189, 45], [189, 72], [100, 72]] },
+      { name: 'Suba 2', color: varColor('--color-suba2'), corners: [[90, 72], [189, 72], [189, 159], [90, 159]] }
     ];
 
     zonesDef.forEach(zone => {
@@ -533,24 +544,44 @@ document.addEventListener('DOMContentLoaded', () => {
       leafletPolygons[zone.name] = L.polygon(latlngs, {
         color: zone.color,
         fillColor: zone.color,
-        fillOpacity: 0.12,
+        fillOpacity: 0.1,
         weight: 1.5,
         dashArray: '3, 4'
-      }).addTo(leafletMap)
-        .bindPopup(`<b>Zona: ${zone.name}</b>`);
+      }).addTo(leafletMap).bindPopup(`<b>Zona: ${zone.name}</b>`);
     });
   }
 
-  // Utility to fetch CSS variable color value
   function varColor(varName) {
     return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
   }
 
-  function updateMapMarker(lat, lng, calle, carrera, zone) {
-    // 1. Update Online Map (Leaflet)
-    if (leafletMap) {
+  function triggerMapRedraw() {
+    if (activeTab === 'scanner') {
+      redrawScannerMap();
+    } else {
+      redrawRouteMap();
+    }
+  }
+
+  // Draw details for the single address scanner view
+  function redrawScannerMap() {
+    // Hide route helpers
+    clearRouteMapGraphics();
+
+    if (!currentScanResult) {
+      if (leafletMarker) leafletMarker.remove();
+      document.getElementById('svg-marker').classList.add('hidden');
+      return;
+    }
+
+    const parsedData = getNormalizedCalleCarrera(currentScanResult);
+    const coords = approximateGridToCoordinates(parsedData.calle, parsedData.carrera);
+    const zone = classifyBogotaZone(parsedData.calle, parsedData.carrera);
+
+    // Update Leaflet Marker
+    if (isMapOnline && leafletMap) {
       if (leafletMarker) {
-        leafletMarker.setLatLng([lat, lng]);
+        leafletMarker.setLatLng([coords.lat, coords.lng]);
       } else {
         const customIcon = L.divIcon({
           className: 'custom-map-pin',
@@ -558,23 +589,154 @@ document.addEventListener('DOMContentLoaded', () => {
           iconSize: [14, 14],
           iconAnchor: [7, 7]
         });
-        leafletMarker = L.marker([lat, lng], { icon: customIcon }).addTo(leafletMap);
+        leafletMarker = L.marker([coords.lat, coords.lng], { icon: customIcon }).addTo(leafletMap);
       }
 
       leafletMarker.bindPopup(`
         <div style="font-family: Outfit, sans-serif; font-size: 0.85rem; line-height: 1.4;">
-          <strong style="color: white; font-size: 0.95rem;">Dirección Ubicada</strong><br/>
-          Calle: ${calle}<br/>
-          Carrera: ${carrera}<br/>
+          <strong style="color: white; font-size: 0.95rem;">Dirección Escaneada</strong><br/>
+          Calle: ${parsedData.calle}<br/>
+          Carrera: ${parsedData.carrera}<br/>
           <strong style="color: ${getZoneHexColor(zone)}; text-transform: uppercase;">Zona: ${zone}</strong>
         </div>
       `).openPopup();
-
-      leafletMap.setView([lat, lng], 14);
+      leafletMap.setView([coords.lat, coords.lng], 14);
     }
 
-    // 2. Update Offline Map (SVG)
-    updateSvgOfflineMap(calle, carrera);
+    // Update SVG Map Pin
+    updateSvgPinPosition(parsedData.calle, parsedData.carrera, zone);
+  }
+
+  // Draw details for the active planning route
+  function redrawRouteMap() {
+    clearScannerMapGraphics();
+    clearRouteMapGraphics();
+
+    // 1. Online Leaflet Route Mapping
+    if (isMapOnline && leafletMap) {
+      // Draw Base station
+      const baseIcon = L.divIcon({
+        className: 'custom-base-pin',
+        html: `<div style="background-color: #6366f1; width: 16px; height: 16px; border: 2.5px solid white; border-radius: 4px; box-shadow: 0 0 10px rgba(99,102,241,0.6);"></div>`,
+        iconSize: [16, 16],
+        iconAnchor: [8, 8]
+      });
+      const baseMarker = L.marker([BASE_COORDS.lat, BASE_COORDS.lng], { icon: baseIcon })
+        .addTo(leafletMap)
+        .bindPopup("<b>Base: Calle 162 # 20 - 31</b>");
+      leafletRouteMarkers.push(baseMarker);
+
+      // Find first uncompleted to open popup
+      let openedPopup = false;
+      const polylinePoints = [[BASE_COORDS.lat, BASE_COORDS.lng]];
+
+      deliveryRoute.forEach((item, index) => {
+        const itemIcon = L.divIcon({
+          className: 'custom-route-pin',
+          html: `<div style="background-color: ${item.completed ? '#64748b' : getZoneHexColor(item.zone)}; width: 14px; height: 14px; border: 2.5px solid white; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 8px; font-weight: 800; box-shadow: 0 0 10px rgba(0,0,0,0.5);">${index + 1}</div>`,
+          iconSize: [14, 14],
+          iconAnchor: [7, 7]
+        });
+
+        const m = L.marker([item.lat, item.lng], { icon: itemIcon }).addTo(leafletMap);
+        m.bindPopup(`
+          <div style="font-family: Outfit, sans-serif; font-size: 0.85rem;">
+            <b>Parada #${index + 1}: ${item.address}</b><br/>
+            Zona: <strong style="color:${getZoneHexColor(item.zone)}; text-transform:uppercase;">${item.zone}</strong><br/>
+            Estado: <b>${item.completed ? 'Entregado' : 'Pendiente'}</b>
+          </div>
+        `);
+        
+        leafletRouteMarkers.push(m);
+        polylinePoints.push([item.lat, item.lng]);
+
+        // Auto open popup for the next delivery
+        if (!item.completed && !openedPopup) {
+          m.openPopup();
+          openedPopup = true;
+        }
+      });
+
+      // Draw polyline connecting route path
+      if (polylinePoints.length > 1) {
+        leafletRoutePolyline = L.polyline(polylinePoints, {
+          color: '#6366f1',
+          weight: 3.5,
+          opacity: 0.65,
+          dashArray: '5, 6'
+        }).addTo(leafletMap);
+
+        // Zoom to fit bounds
+        const group = new L.featureGroup(leafletRouteMarkers);
+        leafletMap.fitBounds(group.getBounds().pad(0.1));
+      } else {
+        leafletMap.setView([BASE_COORDS.lat, BASE_COORDS.lng], 13);
+      }
+    }
+
+    // 2. Offline SVG Route Mapping
+    const routePath = document.getElementById('svg-route-path');
+    
+    // Clean dynamic SVG dots
+    document.querySelectorAll('.svg-route-dot').forEach(el => el.remove());
+
+    if (deliveryRoute.length === 0) {
+      routePath.setAttribute('d', '');
+      return;
+    }
+
+    const baseX = getSvgX(BASE_CARRERA);
+    const baseY = getSvgY(BASE_CALLE);
+    
+    let pathD = `M ${baseX} ${baseY}`;
+
+    deliveryRoute.forEach((item, index) => {
+      // Calculate parsed grid
+      const parsed = getNormalizedCalleCarrera(item.info);
+      const cx = getSvgX(parsed.carrera);
+      const cy = getSvgY(parsed.calle);
+
+      pathD += ` L ${cx} ${cy}`;
+
+      // Draw a circle for each delivery stop on the SVG
+      const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      dot.setAttribute('cx', cx);
+      dot.setAttribute('cy', cy);
+      dot.setAttribute('r', '8');
+      dot.setAttribute('class', 'svg-route-dot');
+      dot.setAttribute('fill', item.completed ? '#64748b' : getZoneHexColor(item.zone));
+      dot.setAttribute('stroke', '#ffffff');
+      dot.setAttribute('stroke-width', '1.5');
+      dot.style.cursor = 'pointer';
+
+      // Tooltip-like title
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = `Parada #${index + 1}: ${item.address} (${item.zone})`;
+      dot.appendChild(title);
+
+      document.getElementById('svg-map').appendChild(dot);
+    });
+
+    routePath.setAttribute('d', pathD);
+  }
+
+  function clearScannerMapGraphics() {
+    if (leafletMarker) {
+      leafletMarker.remove();
+      leafletMarker = null;
+    }
+    document.getElementById('svg-marker').classList.add('hidden');
+  }
+
+  function clearRouteMapGraphics() {
+    leafletRouteMarkers.forEach(m => m.remove());
+    leafletRouteMarkers = [];
+    if (leafletRoutePolyline) {
+      leafletRoutePolyline.remove();
+      leafletRoutePolyline = null;
+    }
+    document.querySelectorAll('.svg-route-dot').forEach(el => el.remove());
+    document.getElementById('svg-route-path').setAttribute('d', '');
   }
 
   function getZoneHexColor(zone) {
@@ -587,56 +749,48 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Offline SVG Map Positioning
-  function updateSvgOfflineMap(calle, carrera) {
-    const svgMarker = document.getElementById('svg-marker');
-    
-    // Map Calle to SVG Y [900, 250] (Calle 30 to 200)
+  function getSvgY(calle) {
     const minCalle = 30;
     const maxCalle = 200;
     const minSvgY = 900;
     const maxSvgY = 250;
-    
-    let svgY = minSvgY;
-    if (calle >= minCalle) {
-      const ratio = Math.min((calle - minCalle) / (maxCalle - minCalle), 1);
-      svgY = minSvgY - ratio * (minSvgY - maxSvgY);
+    if (calle < minCalle) return 950;
+    if (calle > maxCalle) return 200;
+    return minSvgY - ((calle - minCalle) / (maxCalle - minCalle)) * (minSvgY - maxSvgY);
+  }
+
+  function getSvgX(carrera) {
+    if (carrera < 2) return 760;
+    if (carrera <= 72) {
+      return 750 - (carrera - 2) * 5;
+    } else if (carrera <= 159) {
+      return 400 - (carrera - 72) * 3.448;
     } else {
-      svgY = 950; // below Calle 30
+      return 100 - (carrera - 159) * 2;
     }
+  }
 
-    // Map Carrera to SVG X
-    let svgX = 760;
-    if (carrera >= 2 && carrera <= 72) {
-      // Uniform scale for Carrera 2 to 72: X goes from 750 down to 400
-      svgX = 750 - (carrera - 2) * 5;
-    } else if (carrera > 72 && carrera <= 159) {
-      // Scale for Carrera 72 to 159: X goes from 400 down to 100
-      svgX = 400 - (carrera - 72) * 3.448;
-    } else if (carrera > 159) {
-      svgX = 100 - (carrera - 159) * 2;
-    }
+  function updateSvgPinPosition(calle, carrera, zone) {
+    const svgMarker = document.getElementById('svg-marker');
+    const svgY = getSvgY(calle);
+    const svgX = getSvgX(carrera);
 
-    // Position marker and make visible
     svgMarker.setAttribute('transform', `translate(${svgX}, ${svgY})`);
     
-    // Setup pulse ring origin
     const pulseRing = svgMarker.querySelector('.svg-marker-pulse');
     if (pulseRing) {
       pulseRing.setAttribute('cx', '0');
       pulseRing.setAttribute('cy', '0');
     }
-
     svgMarker.classList.remove('hidden');
 
-    // Highlight corresponding SVG polygon
+    // Highlight map polygon
     document.querySelectorAll('.svg-zone').forEach(el => {
       el.setAttribute('stroke-width', '2');
       el.style.opacity = '1';
     });
 
     let activePolyId = null;
-    const zone = classifyBogotaZone(calle, carrera);
     if (zone === 'usaquén') activePolyId = 'svg-zone-usaquen';
     else if (zone === 'chapinero') activePolyId = 'svg-zone-chapinero';
     else if (zone === 'suba 1') activePolyId = 'svg-zone-suba1';
@@ -646,13 +800,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const activePoly = document.getElementById(activePolyId);
       if (activePoly) {
         activePoly.setAttribute('stroke-width', '4.5');
-        // Give it a subtle pop effect
         activePoly.style.opacity = '0.9';
       }
     }
   }
 
-  // --- 11. Form Handler ---
+  // --- 12. Scanner Form Handler ---
   addressForm.addEventListener('submit', (e) => {
     e.preventDefault();
 
@@ -661,7 +814,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const crossingNumStr = inputCrossingNumber.value.trim();
     const plate = inputPlate.value.trim();
 
-    // Parse suffixes if present in user inputs (e.g. 147A -> num:147, suff:A)
     const mainNumParsed = parseInt(mainNumStr);
     const mainSuffix = mainNumStr.replace(mainNumParsed, '') || '';
     
@@ -686,7 +838,328 @@ document.addEventListener('DOMContentLoaded', () => {
     applyAddressResult(info);
   });
 
-  // --- 12. History Persistence & Rendering ---
+  // --- 13. Route Planner Operations ---
+  
+  // Add currently scanned address to the active route planner list
+  btnAddToRoute.addEventListener('click', () => {
+    if (!currentScanResult) {
+      alert("Primero escanea o digita una dirección para poder agregarla a la ruta.");
+      return;
+    }
+    
+    addAddressToRouteList(currentScanResult);
+    switchTab('route'); // switch view
+    document.getElementById('route-list').scrollIntoView({ behavior: 'smooth' });
+  });
+
+  function addAddressToRouteList(info) {
+    const parsedData = getNormalizedCalleCarrera(info);
+    const zone = classifyBogotaZone(parsedData.calle, parsedData.carrera);
+    const coords = approximateGridToCoordinates(parsedData.calle, parsedData.carrera);
+    
+    const addressStr = `${info.type} ${info.mainNum}${info.mainSuffix} # ${info.crossingNum}${info.crossingSuffix} - ${info.plate}`.toUpperCase();
+
+    // Check duplicate
+    const isDuplicate = deliveryRoute.some(item => item.address === addressStr);
+    if (isDuplicate) {
+      alert("Esta dirección ya se encuentra en tu ruta.");
+      return;
+    }
+
+    const newItem = {
+      id: 'route-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+      address: addressStr,
+      info: info,
+      zone: zone,
+      lat: coords.lat,
+      lng: coords.lng,
+      completed: false
+    };
+
+    deliveryRoute.push(newItem);
+    saveRouteState();
+    renderRouteList();
+    triggerMapRedraw();
+  }
+
+  // Parse bulk text block input
+  btnAddBulk.addEventListener('click', () => {
+    const text = bulkAddressesInput.value.trim();
+    if (text === '') {
+      alert("Pega algunas direcciones en el cuadro de texto primero.");
+      return;
+    }
+
+    const lines = text.split('\n');
+    let addedCount = 0;
+
+    lines.forEach(line => {
+      const cleanLine = line.trim();
+      if (cleanLine === '') return;
+
+      const parsedInfo = parseSingleAddressString(cleanLine);
+      if (parsedInfo) {
+        // Add to array directly
+        const parsedData = getNormalizedCalleCarrera(parsedInfo);
+        const zone = classifyBogotaZone(parsedData.calle, parsedData.carrera);
+        const coords = approximateGridToCoordinates(parsedData.calle, parsedData.carrera);
+        const addressStr = `${parsedInfo.type} ${parsedInfo.mainNum}${parsedInfo.mainSuffix} # ${parsedInfo.crossingNum}${parsedInfo.crossingSuffix} - ${parsedInfo.plate}`.toUpperCase();
+
+        const isDuplicate = deliveryRoute.some(item => item.address === addressStr);
+        if (!isDuplicate) {
+          deliveryRoute.push({
+            id: 'route-' + Date.now() + '-' + Math.floor(Math.random() * 10000),
+            address: addressStr,
+            info: parsedInfo,
+            zone: zone,
+            lat: coords.lat,
+            lng: coords.lng,
+            completed: false
+          });
+          addedCount++;
+        }
+      }
+    });
+
+    if (addedCount > 0) {
+      bulkAddressesInput.value = ''; // clear textarea
+      saveRouteState();
+      renderRouteList();
+      triggerMapRedraw();
+      alert(`Se cargaron y clasificaron exitosamente ${addedCount} direcciones.`);
+    } else {
+      alert("No pudimos reconocer ninguna dirección nueva. Verifica el formato.");
+    }
+  });
+
+  // Optimize route using Nearest-Neighbor TSP algorithm starting from Calle 162 # 20-31
+  btnOptimizeRoute.addEventListener('click', () => {
+    if (deliveryRoute.length <= 1) {
+      alert("Necesitas al menos 2 direcciones cargadas para poder optimizar la ruta.");
+      return;
+    }
+
+    // Separate completed and uncompleted
+    const completedItems = deliveryRoute.filter(item => item.completed);
+    let uncompletedItems = deliveryRoute.filter(item => !item.completed);
+
+    if (uncompletedItems.length === 0) {
+      alert("Todas las entregas ya están completadas.");
+      return;
+    }
+
+    const optimizedUncompleted = [];
+    let currentLat = BASE_COORDS.lat;
+    let currentLng = BASE_COORDS.lng;
+
+    // Greedy Nearest-Neighbor calculation
+    while (uncompletedItems.length > 0) {
+      let nearestIdx = -1;
+      let minDistance = Infinity;
+
+      for (let i = 0; i < uncompletedItems.length; i++) {
+        const item = uncompletedItems[i];
+        // Calculate Euclidean distance (sufficient for grid layout)
+        const distance = Math.sqrt(Math.pow(item.lat - currentLat, 2) + Math.pow(item.lng - currentLng, 2));
+        
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearestIdx = i;
+        }
+      }
+
+      const nextTarget = uncompletedItems[nearestIdx];
+      optimizedUncompleted.push(nextTarget);
+      
+      // Update starting reference for next loop
+      currentLat = nextTarget.lat;
+      currentLng = nextTarget.lng;
+
+      // Remove from pool
+      uncompletedItems.splice(nearestIdx, 1);
+    }
+
+    // Recombine: optimized pending deliveries first, then completed ones at the end
+    deliveryRoute = [...optimizedUncompleted, ...completedItems];
+    
+    saveRouteState();
+    renderRouteList();
+    triggerMapRedraw();
+    
+    alert("¡Ruta optimizada geográficamente desde la Calle 162 # 20-31 con éxito!");
+  });
+
+  // Toggle single item status
+  function toggleRouteItemCompleted(itemId) {
+    const item = deliveryRoute.find(item => item.id === itemId);
+    if (item) {
+      item.completed = !item.completed;
+      saveRouteState();
+      renderRouteList();
+      triggerMapRedraw();
+    }
+  }
+
+  // Delete item from route list
+  function deleteRouteItem(itemId) {
+    deliveryRoute = deliveryRoute.filter(item => item.id !== itemId);
+    saveRouteState();
+    renderRouteList();
+    triggerMapRedraw();
+  }
+
+  function saveRouteState() {
+    localStorage.setItem('bogozonas_delivery_route', JSON.stringify(deliveryRoute));
+  }
+
+  function renderRouteList() {
+    if (deliveryRoute.length === 0) {
+      routeList.innerHTML = '';
+      routeEmptyMessage.classList.remove('hidden');
+      routeProgressLabel.textContent = '0 / 0 Entregas';
+      routeProgressBar.style.width = '0%';
+      return;
+    }
+
+    routeEmptyMessage.classList.add('hidden');
+    routeList.innerHTML = '';
+
+    const completedCount = deliveryRoute.filter(item => item.completed).length;
+    const totalCount = deliveryRoute.length;
+    
+    routeProgressLabel.textContent = `${completedCount} / ${totalCount} Entregas`;
+    routeProgressBar.style.width = `${(completedCount / totalCount) * 100}%`;
+
+    // Detect first uncompleted item (this is the active next delivery target)
+    let foundFirstPending = false;
+
+    deliveryRoute.forEach((item, index) => {
+      const li = document.createElement('li');
+      li.className = 'route-item';
+      
+      const isActiveTarget = !item.completed && !foundFirstPending;
+      if (isActiveTarget) {
+        li.classList.add('active-now');
+        foundFirstPending = true;
+      }
+      if (item.completed) {
+        li.classList.add('completed');
+      }
+
+      li.innerHTML = `
+        <div class="route-item-left">
+          <div class="route-number-badge">${index + 1}</div>
+          <div class="route-address-details">
+            <span class="route-address">${item.address}</span>
+            <span class="route-zone-subtext ${item.zone.toLowerCase()}">${item.zone}</span>
+          </div>
+        </div>
+        <div class="route-item-actions">
+          <button class="btn-check-route" title="${item.completed ? 'Marcar pendiente' : 'Marcar completado'}">
+            <i data-lucide="check"></i>
+          </button>
+          <button class="btn-waze-route" title="Guiar con Waze">
+            <i data-lucide="navigation-2"></i>
+          </button>
+          <button class="btn-delete-route" title="Eliminar parada">
+            <i data-lucide="trash"></i>
+          </button>
+        </div>
+      `;
+
+      // Event actions binding
+      li.querySelector('.btn-check-route').addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleRouteItemCompleted(item.id);
+      });
+
+      li.querySelector('.btn-waze-route').addEventListener('click', (e) => {
+        e.stopPropagation();
+        openNavigationApp(item.lat, item.lng, item.address);
+      });
+
+      li.querySelector('.btn-delete-route').addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteRouteItem(item.id);
+      });
+
+      // Clicking on card highlights it on the map view
+      li.addEventListener('click', () => {
+        if (isMapOnline && leafletMap) {
+          leafletMap.setView([item.lat, item.lng], 15);
+          // Highlight that specific marker
+          leafletRouteMarkers.forEach(m => {
+            if (m.getLatLng().lat === item.lat && m.getLatLng().lng === item.lng) {
+              m.openPopup();
+            }
+          });
+        } else {
+          updateSvgOfflineMapHighlight(item.info.mainNum || item.info.crossingNum, item.info.crossingNum || item.info.mainNum);
+        }
+      });
+
+      routeList.appendChild(li);
+    });
+
+    lucide.createIcons();
+  }
+
+  function updateSvgOfflineMapHighlight(calle, carrera) {
+    if (calle && carrera) {
+      updateSvgPinPosition(calle, carrera, classifyBogotaZone(calle, carrera));
+    }
+  }
+
+  // Opens Waze mobile deep link (or falls back to google maps on failure)
+  function openNavigationApp(lat, lng, address) {
+    // Official Waze deep link schema for iOS and Android
+    const wazeUrl = `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
+    
+    // We launch Waze in a new tab/window which mobile browsers catch and redirect to native Waze
+    const opened = window.open(wazeUrl, '_blank');
+    
+    // Fallback logic
+    if (!opened) {
+      const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+      window.open(mapsUrl, '_blank');
+    }
+  }
+
+  // WhatsApp share exporter
+  btnShareWhatsapp.addEventListener('click', () => {
+    if (deliveryRoute.length === 0) {
+      alert("No hay direcciones en la ruta para compartir.");
+      return;
+    }
+
+    let text = `📍 *RUTA DE ENTREGAS - BOGOZONAS* 📍\n`;
+    text += `Punto de Partida: Calle 162 # 20 - 31\n`;
+    text += `------------------------------------\n\n`;
+
+    deliveryRoute.forEach((item, index) => {
+      const statusIcon = item.completed ? '✅' : '📦';
+      const statusText = item.completed ? '(Entregado)' : '(Pendiente)';
+      text += `${index + 1}. ${statusIcon} [${item.zone.toUpperCase()}] ${item.address} ${statusText}\n`;
+    });
+
+    text += `\n------------------------------------\n`;
+    text += `Generado por BogoZonas App 🚗💨`;
+
+    const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+    window.open(whatsappUrl, '_blank');
+  });
+
+  // Empty active route
+  btnClearRoute.addEventListener('click', () => {
+    if (confirm("¿Estás seguro de que deseas vaciar toda la ruta activa?")) {
+      deliveryRoute = [];
+      saveRouteState();
+      renderRouteList();
+      triggerMapRedraw();
+    }
+  });
+
+  // --- 14. History Storage ---
   function saveScanToHistory(info, calle, carrera, zone) {
     let history = [];
     try {
@@ -697,7 +1170,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const cleanAddress = `${info.type} ${info.mainNum}${info.mainSuffix} # ${info.crossingNum}${info.crossingSuffix} - ${info.plate}`;
     
-    // Check if duplicate of last item to avoid repeat saves
     if (history.length > 0 && history[0].address.toLowerCase() === cleanAddress.toLowerCase()) {
       return;
     }
@@ -711,11 +1183,8 @@ document.addEventListener('DOMContentLoaded', () => {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
-    // Keep up to 20 entries
     history.unshift(historyItem);
-    if (history.length > 20) {
-      history.pop();
-    }
+    if (history.length > 20) history.pop();
 
     localStorage.setItem('bogozonas_history', JSON.stringify(history));
     renderHistory();
@@ -751,7 +1220,6 @@ document.addEventListener('DOMContentLoaded', () => {
         <span class="history-badge ${item.zone.toLowerCase()}">${item.zone}</span>
       `;
 
-      // Click event to reload this address back into the viewer
       li.addEventListener('click', () => {
         applyAddressResult(item.info);
       });
@@ -760,7 +1228,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Clear History Action
   btnClearHistory.addEventListener('click', () => {
     if (confirm("¿Estás seguro de que quieres borrar el historial de escaneos?")) {
       localStorage.removeItem('bogozonas_history');
@@ -768,6 +1235,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Initial History Render
+  // --- 15. Initial State Load ---
   renderHistory();
+  renderRouteList();
+  
+  // Default starts on Leaflet
+  initLeafletMap();
+  triggerMapRedraw();
 });
