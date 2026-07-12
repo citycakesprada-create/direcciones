@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0B0F19">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>BogoZonas - Clasificador de Direcciones</title>
+  
+  <!-- Web App Manifest -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" 
+        crossorigin="" />
+        
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- Main Stylesheet -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-logo">
+        <div class="logo-icon">
+          <i data-lucide="map-pin"></i>
+        </div>
+        <div>
+          <h1>BogoZonas</h1>
+          <p>Clasificación instantánea de direcciones</p>
+        </div>
+      </div>
+      <div class="network-badge" id="network-status">
+        <i data-lucide="wifi"></i>
+        <span>Online</span>
+      </div>
+    </header>
+
+    <!-- Main Content Grid -->
+    <main class="app-main">
+      
+      <!-- Section: Scanner / Capture -->
+      <section class="card scanner-card">
+        <div class="card-header">
+          <h2><i data-lucide="camera"></i> Escanear Dirección</h2>
+          <span class="step-badge">Paso 1</span>
+        </div>
+        
+        <div class="scanner-container">
+          <!-- Camera Feed -->
+          <div class="video-wrapper">
+            <video id="webcam" autoplay playsinline muted></video>
+            <div class="scanner-overlay">
+              <div class="scanner-box">
+                <div class="corner top-left"></div>
+                <div class="corner top-right"></div>
+                <div class="corner bottom-left"></div>
+                <div class="corner bottom-right"></div>
+                <div class="scanner-line"></div>
+                <div class="scanner-tip">Encuadra el texto de la dirección aquí</div>
+              </div>
+            </div>
+            <!-- Canvas for capturing frame -->
+            <canvas id="capture-canvas" style="display: none;"></canvas>
+            
+            <!-- Static placeholder / Gallery Preview -->
+            <div id="image-preview-container" class="image-preview-container hidden">
+              <img id="image-preview" src="" alt="Vista previa">
+              <button class="btn btn-icon btn-danger remove-image-btn" id="btn-clear-image" title="Quitar imagen">
+                <i data-lucide="x"></i>
+              </button>
+            </div>
+          </div>
+          
+          <!-- Scanner Actions -->
+          <div class="scanner-actions">
+            <!-- Camera mode toggles -->
+            <div class="camera-controls">
+              <button class="btn btn-secondary" id="btn-start-camera">
+                <i data-lucide="play"></i> Iniciar Cámara
+              </button>
+              <button class="btn btn-secondary hidden" id="btn-switch-camera">
+                <i data-lucide="refresh-cw"></i> Cambiar Cámara
+              </button>
+              <button class="btn btn-danger hidden" id="btn-stop-camera">
+                <i data-lucide="square"></i> Detener
+              </button>
+            </div>
+            
+            <!-- Process controls -->
+            <div class="process-controls">
+              <button class="btn btn-primary btn-lg btn-glow hidden" id="btn-capture">
+                <i data-lucide="aperture"></i> Tomar Foto
+              </button>
+              
+              <label for="gallery-input" class="btn btn-outline btn-lg" id="btn-gallery-label">
+                <i data-lucide="image"></i> Subir de Galería
+              </label>
+              <input type="file" id="gallery-input" accept="image/*" class="hidden">
+            </div>
+          </div>
+        </div>
+
+        <!-- OCR Loading overlay -->
+        <div id="ocr-loader" class="ocr-loader hidden">
+          <div class="loader-content">
+            <div class="spinner"></div>
+            <h3>Procesando con Inteligencia Artificial (OCR)...</h3>
+            <p id="ocr-status-text">Leyendo texto de la imagen...</p>
+            <div class="progress-bar-container">
+              <div id="ocr-progress-bar" class="progress-bar"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section: Results & Verification -->
+      <section class="card results-card" id="results-section">
+        <div class="card-header">
+          <h2><i data-lucide="layers"></i> Resultado del Análisis</h2>
+          <span class="step-badge">Paso 2</span>
+        </div>
+        
+        <div class="results-layout">
+          <!-- Left: Classification Info -->
+          <div class="classification-info">
+            <div class="zone-badge-container">
+              <div id="result-zone-badge" class="zone-badge zone-unclassified">
+                <div class="zone-badge-icon">
+                  <i data-lucide="help-circle" id="zone-icon"></i>
+                </div>
+                <div class="zone-badge-text">
+                  <span class="badge-label">Zona Detectada</span>
+                  <h3 id="result-zone-name">Sin Escanear</h3>
+                </div>
+              </div>
+            </div>
+
+            <div class="extracted-details">
+              <h3>Detalles de Dirección</h3>
+              <div class="details-grid">
+                <div class="detail-item">
+                  <span class="detail-label">Calle</span>
+                  <span class="detail-val" id="detail-calle">-</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Carrera</span>
+                  <span class="detail-val" id="detail-carrera">-</span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Texto Detectado</span>
+                  <span class="detail-val text-raw" id="detail-raw-text">Ninguno</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Interactive Editor -->
+          <div class="address-editor">
+            <h3>Corregir o Digitar Dirección</h3>
+            <form id="address-form" class="form-grid">
+              <div class="form-group">
+                <label for="input-type">Vía Principal</label>
+                <select id="input-type" class="form-control">
+                  <option value="calle">Calle</option>
+                  <option value="carrera">Carrera</option>
+                  <option value="diagonal">Diagonal</option>
+                  <option value="transversal">Transversal</option>
+                  <option value="avenida">Avenida</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="input-main-number">Número Vía</label>
+                <input type="text" id="input-main-number" class="form-control" placeholder="Ej. 147" pattern="\d+[A-Za-z]?" required>
+              </div>
+              <div class="form-group">
+                <label for="input-crossing-number">Número Cruce</label>
+                <input type="text" id="input-crossing-number" class="form-control" placeholder="Ej. 19" pattern="\d+[A-Za-z]?" required>
+              </div>
+              <div class="form-group">
+                <label for="input-plate">Placa / Casa</label>
+                <input type="text" id="input-plate" class="form-control" placeholder="Ej. 50">
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-full">
+                  <i data-lucide="check-circle"></i> Clasificar Dirección
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section: Map Visualization -->
+      <section class="card map-card">
+        <div class="card-header">
+          <h2><i data-lucide="navigation"></i> Ubicación y Límites Geográficos</h2>
+          <div class="map-controls-header">
+            <button class="btn btn-small btn-secondary active" id="btn-map-online">Online (Leaflet)</button>
+            <button class="btn btn-small btn-secondary" id="btn-map-offline">Offline (SVG)</button>
+          </div>
+        </div>
+        
+        <div class="map-wrapper">
+          <!-- Online Leaflet Map Container -->
+          <div id="map" class="map-container"></div>
+          
+          <!-- Offline SVG Map Container -->
+          <div id="svg-map-container" class="map-container hidden">
+            <!-- Dynamic SVG Map of Bogota Zones -->
+            <svg id="svg-map" viewBox="0 0 800 1000" width="100%" height="100%">
+              <defs>
+                <linearGradient id="usaquen-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="rgba(0, 210, 255, 0.15)"/>
+                  <stop offset="100%" stop-color="rgba(0, 210, 255, 0.4)"/>
+                </linearGradient>
+                <linearGradient id="chapinero-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="rgba(157, 78, 221, 0.15)"/>
+                  <stop offset="100%" stop-color="rgba(157, 78, 221, 0.4)"/>
+                </linearGradient>
+                <linearGradient id="suba1-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="rgba(255, 159, 28, 0.15)"/>
+                  <stop offset="100%" stop-color="rgba(255, 159, 28, 0.4)"/>
+                </linearGradient>
+                <linearGradient id="suba2-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="rgba(255, 0, 110, 0.15)"/>
+                  <stop offset="100%" stop-color="rgba(255, 0, 110, 0.4)"/>
+                </linearGradient>
+                <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+                  <feGaussianBlur stdDeviation="4" result="blur" />
+                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                </filter>
+              </defs>
+              
+              <!-- Graticule/Grid lines and labels -->
+              <g class="svg-grid" stroke="rgba(255,255,255,0.05)" stroke-width="1" stroke-dasharray="4,4">
+                <!-- Calle lines (horizontal) -->
+                <line x1="50" y1="900" x2="750" y2="900" />
+                <line x1="50" y1="700" x2="750" y2="700" />
+                <line x1="50" y1="500" x2="750" y2="500" />
+                <line x1="50" y1="300" x2="750" y2="300" />
+                <line x1="50" y1="100" x2="750" y2="100" />
+                
+                <!-- Carrera lines (vertical, increase right-to-left) -->
+                <line x1="750" y1="50" x2="750" y2="950" />
+                <line x1="600" y1="50" x2="600" y2="950" />
+                <line x1="450" y1="50" x2="450" y2="950" />
+                <line x1="300" y1="50" x2="300" y2="950" />
+                <line x1="150" y1="50" x2="150" y2="950" />
+              </g>
+              
+              <!-- Grid text labels -->
+              <g class="svg-labels" fill="rgba(255,255,255,0.3)" font-size="12" font-family="Outfit, sans-serif">
+                <!-- Calles -->
+                <text x="15" y="905">Calle 30</text>
+                <text x="15" y="705">Calle 90</text>
+                <text x="15" y="665">Calle 100</text>
+                <text x="15" y="645">Calle 105</text>
+                <text x="15" y="305">Calle 189</text>
+                <text x="15" y="285">Calle 193</text>
+                
+                <!-- Carreras (oriented right to left) -->
+                <text x="735" y="970" text-anchor="middle">Kra 2</text>
+                <text x="610" y="970" text-anchor="middle">Kra 30 (NQS)</text>
+                <text x="535" y="970" text-anchor="middle">Kra 45 (AutoN)</text>
+                <text x="400" y="970" text-anchor="middle">Kra 72 (Boyacá)</text>
+                <text x="100" y="970" text-anchor="middle">Kra 159</text>
+              </g>
+
+              <!-- Zones Polygons -->
+              <!-- Chapinero: Calle 30 to 100, Carrera 2 to 30 -->
+              <polygon id="svg-zone-chapinero" class="svg-zone" points="750,900 750,660 610,660 610,900" fill="url(#chapinero-grad)" stroke="#9d4edd" stroke-width="2" />
+              
+              <!-- Usaquén: Calle 105 to 193, Carrera 2 to 45 -->
+              <polygon id="svg-zone-usaquen" class="svg-zone" points="750,640 750,280 535,280 535,640" fill="url(#usaquen-grad)" stroke="#00d2ff" stroke-width="2" />
+              
+              <!-- Suba 1: Calle 100 to 189, Carrera 45 to 72 -->
+              <polygon id="svg-zone-suba1" class="svg-zone" points="535,660 535,300 400,300 400,660" fill="url(#suba1-grad)" stroke="#ff9f1c" stroke-width="2" />
+              
+              <!-- Suba 2: Calle 90 to 189, Carrera 72 to 159 -->
+              <polygon id="svg-zone-suba2" class="svg-zone" points="400,700 400,300 100,300 100,700" fill="url(#suba2-grad)" stroke="#ff006e" stroke-width="2" />
+
+              <!-- Main Roads for reference -->
+              <g stroke="rgba(255,255,255,0.15)" stroke-width="4">
+                <!-- Autopista Norte (Kra 45) -->
+                <line x1="535" y1="950" x2="535" y2="50" id="road-autonorte" />
+                <!-- Av. Boyacá (Kra 72) -->
+                <line x1="400" y1="950" x2="400" y2="50" id="road-boyaca" />
+                <!-- Av. NQS (Kra 30) -->
+                <line x1="610" y1="950" x2="610" y2="660" id="road-nqs" />
+                <!-- Calle 100 -->
+                <line x1="750" y1="660" x2="50" y2="660" id="road-c100" />
+              </g>
+              
+              <g fill="rgba(255,255,255,0.4)" font-size="10" font-family="Outfit, sans-serif">
+                <text x="545" y="150" transform="rotate(90, 545, 150)">Autopista Norte</text>
+                <text x="410" y="150" transform="rotate(90, 410, 150)">Avenida Boyacá</text>
+                <text x="620" y="780" transform="rotate(90, 620, 780)">Av. NQS</text>
+                <text x="200" y="652">Calle 100</text>
+              </g>
+
+              <!-- SVG Interactive Marker -->
+              <g id="svg-marker" class="hidden">
+                <circle cx="0" cy="0" r="16" fill="rgba(239, 35, 60, 0.4)" class="svg-marker-pulse" />
+                <path d="M12 0c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 8 12 20 12 20s12-12 12-20z" fill="#ef233c" stroke="#ffffff" stroke-width="1.5" transform="scale(0.8) translate(0, -12)" filter="url(#glow)" />
+                <circle cx="0" cy="-9" r="3" fill="#ffffff" />
+              </g>
+            </svg>
+          </div>
+        </div>
+        
+        <div class="map-legend">
+          <div class="legend-item"><span class="legend-color usaquen"></span> Usaquén</div>
+          <div class="legend-item"><span class="legend-color chapinero"></span> Chapinero</div>
+          <div class="legend-item"><span class="legend-color suba1"></span> Suba 1</div>
+          <div class="legend-item"><span class="legend-color suba2"></span> Suba 2</div>
+        </div>
+      </section>
+
+      <!-- Section: History -->
+      <section class="card history-card">
+        <div class="card-header">
+          <h2><i data-lucide="history"></i> Historial Reciente</h2>
+          <button class="btn btn-small btn-outline" id="btn-clear-history">
+            <i data-lucide="trash-2"></i> Limpiar Historial
+          </button>
+        </div>
+        
+        <div class="history-list-wrapper">
+          <div class="history-empty" id="history-empty-message">
+            <i data-lucide="clock" class="empty-icon"></i>
+            <p>No tienes escaneos recientes.</p>
+            <span>Las direcciones que clasifiques aparecerán aquí para acceso rápido offline.</span>
+          </div>
+          <ul class="history-list hidden" id="history-list">
+            <!-- Inserted dynamically -->
+          </ul>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>BogoZonas PWA &copy; 2026 - Clasificación de cuadrantes rápida y local.</p>
+    </footer>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" 
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" 
+          crossorigin=""></script>
+          
+  <!-- Tesseract.js -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
+  
+  <!-- App JS -->
+  <script src="app.js"></script>
+</body>
+</html>

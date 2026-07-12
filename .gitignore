@@ -1,0 +1,6 @@
+__pycache__/
+*.log
+.system_generated/
+.git/
+.agents/
+.vscode/
